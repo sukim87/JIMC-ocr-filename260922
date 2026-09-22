@@ -27,7 +27,6 @@ st.set_page_config(
 
 # ---------------- 사이드바 (로고 및 담당자 문의 정보) ----------------
 with st.sidebar:
-  # 로고 이미지 표시
   logo_path = get_resource_path("logo.jpg")
   if not os.path.exists(logo_path):
     logo_path = get_resource_path("세로-영문-Jeongwoo.jpg")
@@ -72,25 +71,29 @@ with st.spinner("OCR AI 모델을 로딩 중입니다..."):
   reader = load_ocr_reader()
 
 
-# 수주번호 오인식 문자 정밀 보정 함수 (O->0, Z->2 등)
+# 수주번호 오인식 문자 정밀 보정 함수 (MHXP 뒤 무조건 2,3,4 검증)
 def clean_and_fix_order_no(order_str):
   if not order_str:
     return ""
 
-  # ZNAJOB 패턴은 숫자 보정 없이 원본 반환
-  if order_str.upper().startswith("ZNAJOB"):
-    return order_str.strip()
+  order_upper = order_str.upper()
 
-  if any(
-      bad in order_str.upper() for bad in ["MATERIAL", "MATER1AL", "MATL"]
+  # PO, P0, MI, MATERIAL 등 수주번호가 될 수 없는 패턴 완벽 차단
+  if (
+      order_upper.startswith("PO")
+      or order_upper.startswith("P0")
+      or order_upper.startswith("MI")
   ):
     return ""
+  if any(bad in order_upper for bad in ["MATERIAL", "MATER1AL", "MATL"]):
+    return ""
 
-  match = re.search(
-      r"([MHXP][0-9OQZILsSbB]{5,}(?:[\-\_]?[A-Za-z0-9]+)?)",
-      order_str,
-      re.IGNORECASE,
-  )
+  # ZNAJOB 패턴은 그대로 유지
+  if order_upper.startswith("ZNAJOB"):
+    return order_str.strip()
+
+  # M, H, X, P 바로 뒤에 무조건 2, 3, 4 숫자가 오는 패턴만 매칭
+  match = re.search(r"([MHXP][234][A-Za-z0-9\-_]+)", order_str, re.IGNORECASE)
   if not match:
     return ""
 
@@ -103,8 +106,8 @@ def clean_and_fix_order_no(order_str):
 
   corrected_main = ""
   for idx, char in enumerate(main_part):
+    c_upper = char.upper()
     if idx < 6:
-      c_upper = char.upper()
       if c_upper in ["O", "Q"]:
         corrected_main += "0"
       elif c_upper == "Z":
@@ -165,10 +168,9 @@ def process_ocr_smart(img, ocr_reader):
       if kw.lower() in extracted_text.lower():
         score += 15
 
+    # 수주번호 가산점 (MHXP 뒤 2, 3, 4만 감지)
     if re.search(
-        r"([MHXP][234][A-Z0-9]+|ZNAJOB|[MHXP][0-9OQZILsSbB]{5,})",
-        extracted_text,
-        re.IGNORECASE,
+        r"([MHXP][234][A-Z0-9]+|ZNAJOB)", extracted_text, re.IGNORECASE
     ):
       score += 30
 
@@ -250,7 +252,7 @@ if uploaded_files:
           full_text = " ".join(full_text_list)
           df = pd.DataFrame(parsed_data) if parsed_data else pd.DataFrame()
 
-        # ---------------- 1. 수주번호 추출 (수정 보완 영역) ----------------
+        # ---------------- 1. 수주번호 추출 (수정 완) ----------------
         order_no = ""
         order_blacklist = [
             "ORDER",
@@ -274,35 +276,37 @@ if uploaded_files:
         if znajob_match:
           order_no = znajob_match.group(1).strip()
         else:
-          # 1-2) M, H, X, P 뒤에 2, 3, 4가 오는 패턴 및 정밀 OCR 패턴 추출
+          # 1-2) M, H, X, P 뒤에 무조건 2, 3, 4가 오는 패턴만 매칭 (PO, P0, MI 자동 차단)
           h_matches = re.findall(
-              r"\b([MHXP][234][A-Z0-9\-_]+|[MHXP][0-9OQZILsSbB]{5,}(?:[\-\_]?[A-Za-z0-9]+)?)\b",
-              full_text,
-              re.IGNORECASE,
+              r"\b([MHXP][234][A-Z0-9\-_]+)\b", full_text, re.IGNORECASE
           )
           for hm in h_matches:
             hm_upper = hm.upper()
-            # MI로 시작하는 납품번호 및 블랙리스트 단어 자동 제외
             if (
                 hm_upper not in order_blacklist
                 and not hm_upper.startswith("MATER")
                 and not hm_upper.startswith("MI")
+                and not hm_upper.startswith("PO")
+                and not hm_upper.startswith("P0")
             ):
               order_no = hm.strip()
               break
 
           if not order_no:
             alt_order = re.search(
-                r"수주번호(?:[^\w]|Order|Urder|No)*([MHXP][0-9OQZILsSbB]{5,}[A-Za-z0-9\-_]*)",
+                r"수주번호(?:[^\w]|Order|Urder|No)*([MHXP][234][A-Za-z0-9\-_]*)",
                 full_text,
                 re.IGNORECASE,
             )
             if alt_order:
               cand = alt_order.group(1).strip()
+              cand_upper = cand.upper()
               if (
-                  cand.upper() not in order_blacklist
-                  and not cand.upper().startswith("MATER")
-                  and not cand.upper().startswith("MI")
+                  cand_upper not in order_blacklist
+                  and not cand_upper.startswith("MATER")
+                  and not cand_upper.startswith("MI")
+                  and not cand_upper.startswith("PO")
+                  and not cand_upper.startswith("P0")
               ):
                 order_no = cand
 
