@@ -76,7 +76,7 @@ def clean_and_fix_order_no(order_str):
   if not order_str:
     return ""
 
-  order_upper = order_str.upper()
+  order_upper = order_str.upper().strip()
 
   # PO, P0, MI, MATERIAL 등 수주번호가 될 수 없는 패턴 완벽 차단
   if (
@@ -215,11 +215,14 @@ if uploaded_files:
   zip_buffer = io.BytesIO()
 
   with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-    progress_bar = st.progress(0)
+    # 진행률 바 float형(0.0) 초기화
+    progress_bar = st.progress(0.0)
 
     for idx, file in enumerate(target_files):
       file_bytes = file.read()
-      file_ext = file.name.split(".")[-1].lower()
+      file_ext = (
+          file.name.split(".")[-1].lower() if "." in file.name else "pdf"
+      )
 
       try:
         image = None
@@ -227,8 +230,12 @@ if uploaded_files:
           pdf = pdfium.PdfDocument(file_bytes)
           page = pdf[0]
           image = page.render(scale=1.8).to_pil()
+          pdf.close()  # 메모리 해제
         else:
           image = Image.open(io.BytesIO(file_bytes))
+
+        full_text = ""
+        df = pd.DataFrame()
 
         if image:
           ocr_results, _ = process_ocr_smart(image, reader)
@@ -252,7 +259,7 @@ if uploaded_files:
           full_text = " ".join(full_text_list)
           df = pd.DataFrame(parsed_data) if parsed_data else pd.DataFrame()
 
-        # ---------------- 1. 수주번호 추출 (수정 완) ----------------
+        # ---------------- 1. 수주번호 추출 ----------------
         order_no = ""
         order_blacklist = [
             "ORDER",
@@ -334,7 +341,7 @@ if uploaded_files:
         # ---------------- 3. 업체명 추출 ----------------
         vendor = ""
         customer_words = set()
-        if not df.empty:
+        if not df.empty and "text" in df.columns:
           cust_labels = df[
               df["text"].str.contains("고객|Customer", na=False, case=False)
           ]
@@ -349,11 +356,10 @@ if uploaded_files:
                 & (df["left"] > c_left)
             ].sort_values(by="left")
             for _, r in cust_targets.iterrows():
-              clean_c = re.sub(r"[^가-힣a-zA-Z0-9]", "", r["text"])
+              clean_c = re.sub(r"[^가-힣a-zA-Z0-9]", "", str(r["text"]))
               if clean_c and clean_c not in ["고객", "Customer"]:
                 customer_words.add(clean_c)
 
-        if not df.empty:
           vendor_labels = df[
               df["text"].str.contains(
                   "업체소재지|소재지|Vendor", na=False, case=False
@@ -368,7 +374,7 @@ if uploaded_files:
                 & (df["top"] <= v_top + 50)
             ].sort_values(by="left")
             for _, r in targets.iterrows():
-              t = r["text"]
+              t = str(r["text"])
               if any(
                   k in t
                   for k in [
@@ -471,14 +477,15 @@ if uploaded_files:
       except Exception as e:
         st.error(f"'{file.name}' 처리 중 오류 발생: {e}")
 
-      progress_bar.progress((idx + 1) / len(target_files))
+      prog_val = min(1.0, float(idx + 1) / float(len(target_files)))
+      progress_bar.progress(prog_val)
 
   st.success("🎉 모든 파일 분석이 완료되었습니다!")
 
-  zip_buffer.seek(0)
+  # ZIP 다운로드 바이트 추출
   st.download_button(
       label="📦 변환된 모든 파일 한 번에 다운로드 (ZIP)",
-      data=zip_buffer,
+      data=zip_buffer.getvalue(),
       file_name="인수검사서_일괄변환.zip",
       mime="application/zip",
       type="primary",
@@ -487,7 +494,7 @@ if uploaded_files:
   st.markdown("---")
   st.markdown("### 📊 파일별 상세 결과 및 개별 다운로드")
 
-  for res in processed_results:
+  for idx, res in enumerate(processed_results):
     with st.expander(
         f"📁 기존 파일: {res['original_name']} ➔ 변경: {res['new_name']}",
         expanded=True,
@@ -500,10 +507,11 @@ if uploaded_files:
             f" `{res['po_no']}`"
         )
       with col2:
+        # Key 중복 방지 (idx 추가)
         st.download_button(
             label="💾 변경된 파일 다운로드",
             data=res["file_bytes"],
             file_name=res["new_name"],
             mime=f"application/{res['ext']}",
-            key=res["original_name"],
+            key=f"dl_{idx}_{res['original_name']}",
         )
