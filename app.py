@@ -77,13 +77,17 @@ def clean_and_fix_order_no(order_str):
   if not order_str:
     return ""
 
+  # ZNAJOB 패턴은 숫자 보정 없이 원본 반환
+  if order_str.upper().startswith("ZNAJOB"):
+    return order_str.strip()
+
   if any(
       bad in order_str.upper() for bad in ["MATERIAL", "MATER1AL", "MATL"]
   ):
     return ""
 
   match = re.search(
-      r"([HXZM][0-9OQZILsSbB]{5,}(?:[\-\_]?[A-Za-z0-9]+)?)",
+      r"([MHXP][0-9OQZILsSbB]{5,}(?:[\-\_]?[A-Za-z0-9]+)?)",
       order_str,
       re.IGNORECASE,
   )
@@ -162,7 +166,9 @@ def process_ocr_smart(img, ocr_reader):
         score += 15
 
     if re.search(
-        r"[HXZM][0-9OQZILsSbB]{5,}", extracted_text, re.IGNORECASE
+        r"([MHXP][234][A-Z0-9]+|ZNAJOB|[MHXP][0-9OQZILsSbB]{5,})",
+        extracted_text,
+        re.IGNORECASE,
     ):
       score += 30
 
@@ -244,7 +250,7 @@ if uploaded_files:
           full_text = " ".join(full_text_list)
           df = pd.DataFrame(parsed_data) if parsed_data else pd.DataFrame()
 
-        # ---------------- 1. 수주번호 추출 ----------------
+        # ---------------- 1. 수주번호 추출 (수정 보완 영역) ----------------
         order_no = ""
         order_blacklist = [
             "ORDER",
@@ -263,31 +269,42 @@ if uploaded_files:
             "MATL",
         ]
 
-        h_matches = re.findall(
-            r"\b([HXZM][0-9OQZILsSbB]{5,}(?:[\-\_]?[A-Za-z0-9]+)?)\b",
-            full_text,
-            re.IGNORECASE,
-        )
-        for hm in h_matches:
-          hm_upper = hm.upper()
-          if hm_upper not in order_blacklist and not hm_upper.startswith(
-              "MATER"
-          ):
-            order_no = hm.strip()
-            break
-
-        if not order_no:
-          alt_order = re.search(
-              r"수주번호(?:[^\w]|Order|Urder|No)*([HXZM][0-9OQZILsSbB]{5,}[A-Za-z0-9\-_]*)",
+        # 1-1) ZNAJOB 패턴 우선 추출
+        znajob_match = re.search(r"\b(ZNAJOB[A-Z0-9]*)\b", full_text, re.IGNORECASE)
+        if znajob_match:
+          order_no = znajob_match.group(1).strip()
+        else:
+          # 1-2) M, H, X, P 뒤에 2, 3, 4가 오는 패턴 및 정밀 OCR 패턴 추출
+          h_matches = re.findall(
+              r"\b([MHXP][234][A-Z0-9\-_]+|[MHXP][0-9OQZILsSbB]{5,}(?:[\-\_]?[A-Za-z0-9]+)?)\b",
               full_text,
               re.IGNORECASE,
           )
-          if alt_order:
-            cand = alt_order.group(1).strip()
-            if cand.upper() not in order_blacklist and not cand.upper().startswith(
-                "MATER"
+          for hm in h_matches:
+            hm_upper = hm.upper()
+            # MI로 시작하는 납품번호 및 블랙리스트 단어 자동 제외
+            if (
+                hm_upper not in order_blacklist
+                and not hm_upper.startswith("MATER")
+                and not hm_upper.startswith("MI")
             ):
-              order_no = cand
+              order_no = hm.strip()
+              break
+
+          if not order_no:
+            alt_order = re.search(
+                r"수주번호(?:[^\w]|Order|Urder|No)*([MHXP][0-9OQZILsSbB]{5,}[A-Za-z0-9\-_]*)",
+                full_text,
+                re.IGNORECASE,
+            )
+            if alt_order:
+              cand = alt_order.group(1).strip()
+              if (
+                  cand.upper() not in order_blacklist
+                  and not cand.upper().startswith("MATER")
+                  and not cand.upper().startswith("MI")
+              ):
+                order_no = cand
 
         order_no = re.sub(r"[\-_]$", "", order_no)
         order_no = clean_and_fix_order_no(order_no)
