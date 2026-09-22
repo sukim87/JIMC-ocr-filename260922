@@ -111,7 +111,7 @@ def clean_and_fix_order_no(order_str):
   return prefix + "".join(parts)
 
 
-# 🔄 스마트 4방향 회전 감지 및 OCR 처리 함수 (3번 정방향 자동 맞춤)
+# 🔄 스마트 4방향 회전 감지 및 OCR 처리 함수 (정방향 자동 맞춤)
 def process_ocr_smart(img, ocr_reader):
   angles = [0, 90, 180, 270]
   best_angle = 0
@@ -185,8 +185,15 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
+  # 센스 있는 대기 안내 문구 표시
+  st.warning("""
+    ☕ **잠시 커피 한 잔의 여유를 가져보세요!**  
+    AI가 문서의 **방향을 바르게 잡고 정밀하게 분석**하는 데 **약 1~2분 정도** 소요됩니다.  
+    분석이 완료될 동안 잠시 다른 업무를 보고 오셔도 좋습니다. 😊
+    """)
+
   if len(uploaded_files) > 5:
-    st.warning(
+    st.info(
         "⚠️ 최대 5개까지 한 번에 처리 가능합니다. 상위 5개 파일만 분석합니다."
     )
     target_files = uploaded_files[:5]
