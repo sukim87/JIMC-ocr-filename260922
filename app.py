@@ -37,15 +37,15 @@ with st.sidebar:
   st.markdown("---")
   st.caption("ⓒ Jeongwoo Industrial Machine Co., Ltd. All rights reserved.")
 
-# ---------------- 메인 화면 제목 및 업데이트 표시 ----------------
+# ---------------- 메인 화면 제목 및 사용 안내 ----------------
 UPDATE_DATE = "2026-09-22"
 st.title(f"📄 인수검사서 파일명 자동 생성기 `v{UPDATE_DATE}`")
 st.caption(f"📅 최종 업데이트: {UPDATE_DATE} | (주)정우 품질보증 시스템")
 
-# ---------------- 사용 안내 문구 추가 ----------------
 st.info("""
 💡 **사용 안내**  
-인수검사 완료한 파일을 스캔 후 첨부하시면 자동으로 제목을 작성하여 드립니다.
+인수검사 완료한 파일을 스캔 후 첨부하시면 자동으로 제목을 작성하여 드립니다.  
+*(기울어지거나 돌아간 스캔 문서도 자동으로 바르게 돌려서 읽습니다.)*
 
 📌 **파일명 생성 기준**: `수주번호_날짜_업체명_발주서번호`
 """)
@@ -111,24 +111,70 @@ def clean_and_fix_order_no(order_str):
   return prefix + "".join(parts)
 
 
-# 스마트 OCR 처리 함수
+# 🔄 스마트 4방향 회전 감지 및 OCR 처리 함수 (3번 정방향 자동 맞춤)
 def process_ocr_smart(img, ocr_reader):
-  angles = [0, 270, 90, 180]
+  angles = [0, 90, 180, 270]
+  best_angle = 0
+  best_score = -1
+  best_results = []
+  best_img = img
+
+  # 올바른 정방향(가로)일 때 나타나는 양식 대표 키워드
+  keywords = [
+      "인수검사",
+      "의뢰서",
+      "보고서",
+      "수주번호",
+      "발주서",
+      "INSPECTION",
+      "RECEIVING",
+      "NOTIFICATION",
+      "REPORT",
+      "Order",
+      "Vendor",
+      "Customer",
+      "품질",
+      "구매",
+  ]
+
   for angle in angles:
     test_img = img.rotate(angle, expand=True) if angle != 0 else img
     w, h = test_img.size
 
-    crop_box = (0, 0, w, int(h * 0.50))
+    # 상단 55% 영역을 잘라내어 빠른 키워드 검사 진행
+    crop_box = (0, 0, w, int(h * 0.55))
     cropped = test_img.crop(crop_box)
     img_np = np.array(cropped.convert("RGB"))
 
     results = ocr_reader.readtext(img_np)
+    extracted_text = " ".join([t[1].strip() for t in results])
 
-    extracted_text = "".join([t[1].strip() for t in results])
-    if len(extracted_text) >= 10:
-      return results, test_img
+    # 각 방향별 정방향 점수 계산
+    score = 0
+    for kw in keywords:
+      if kw.lower() in extracted_text.lower():
+        score += 15
 
-  return ocr_reader.readtext(np.array(img.convert("RGB"))), img
+    # 수주번호 패턴(H/X/Z/M + 숫자) 포함 시 높은 가산점
+    if re.search(
+        r"[HXZM][0-9OQZILsSbB]{5,}", extracted_text, re.IGNORECASE
+    ):
+      score += 30
+
+    score += min(len(extracted_text), 20)
+
+    if score > best_score:
+      best_score = score
+      best_angle = angle
+      best_img = test_img
+      best_results = results
+
+  # 정방향 점수가 너무 낮을 경우 기본 이미지로 처리
+  if best_score < 15:
+    img_np = np.array(img.convert("RGB"))
+    return ocr_reader.readtext(img_np), img
+
+  return best_results, best_img
 
 
 # ---------------- 파일 업로드 ----------------
@@ -167,6 +213,7 @@ if uploaded_files:
           image = Image.open(io.BytesIO(file_bytes))
 
         if image:
+          # 자동 회전 감지 후 OCR 분석
           ocr_results, _ = process_ocr_smart(image, reader)
 
           parsed_data = []
