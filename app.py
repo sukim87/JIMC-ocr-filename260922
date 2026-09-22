@@ -1,6 +1,7 @@
 import io
 import os
 import re
+import sys
 import zipfile
 import easyocr
 import numpy as np
@@ -9,9 +10,17 @@ import pypdfium2 as pdfium
 import streamlit as st
 from PIL import Image
 
+
+# EXE 패키징 시 리소스 경로 리졸버 함수
+def get_resource_path(relative_path):
+  if hasattr(sys, "_MEIPASS"):
+    return os.path.join(sys._MEIPASS, relative_path)
+  return os.path.join(os.path.abspath("."), relative_path)
+
+
 # 웹 페이지 기본 설정
 st.set_page_config(
-    page_title="인수검사서 파일명 자동 생성기 | (주)정우",
+    page_title="인수검사서 파일명 자동 생성기 | (주)정우산기",
     page_icon="📄",
     layout="wide",
 )
@@ -19,9 +28,9 @@ st.set_page_config(
 # ---------------- 사이드바 (로고 및 담당자 문의 정보) ----------------
 with st.sidebar:
   # 로고 이미지 표시
-  logo_path = "logo.jpg"
+  logo_path = get_resource_path("logo.jpg")
   if not os.path.exists(logo_path):
-    logo_path = "세로-영문-Jeongwoo.jpg"
+    logo_path = get_resource_path("세로-영문-Jeongwoo.jpg")
 
   if os.path.exists(logo_path):
     st.image(logo_path, use_container_width=True)
@@ -40,7 +49,7 @@ with st.sidebar:
 # ---------------- 메인 화면 제목 및 사용 안내 ----------------
 UPDATE_DATE = "2026-09-22"
 st.title(f"📄 인수검사서 파일명 자동 생성기 `v{UPDATE_DATE}`")
-st.caption(f"📅 최종 업데이트: {UPDATE_DATE} | (주)정우 품질보증 시스템")
+st.caption(f"📅 최종 업데이트: {UPDATE_DATE} | (주)정우산기")
 
 st.info("""
 💡 **사용 안내**  
@@ -111,7 +120,7 @@ def clean_and_fix_order_no(order_str):
   return prefix + "".join(parts)
 
 
-# 🔄 스마트 4방향 회전 감지 및 OCR 처리 함수 (정방향 자동 맞춤)
+# 🔄 스마트 4방향 회전 감지 및 OCR 처리 함수
 def process_ocr_smart(img, ocr_reader):
   angles = [0, 90, 180, 270]
   best_angle = 0
@@ -119,7 +128,6 @@ def process_ocr_smart(img, ocr_reader):
   best_results = []
   best_img = img
 
-  # 올바른 정방향(가로)일 때 나타나는 양식 대표 키워드
   keywords = [
       "인수검사",
       "의뢰서",
@@ -141,7 +149,6 @@ def process_ocr_smart(img, ocr_reader):
     test_img = img.rotate(angle, expand=True) if angle != 0 else img
     w, h = test_img.size
 
-    # 상단 55% 영역을 잘라내어 빠른 키워드 검사 진행
     crop_box = (0, 0, w, int(h * 0.55))
     cropped = test_img.crop(crop_box)
     img_np = np.array(cropped.convert("RGB"))
@@ -149,13 +156,11 @@ def process_ocr_smart(img, ocr_reader):
     results = ocr_reader.readtext(img_np)
     extracted_text = " ".join([t[1].strip() for t in results])
 
-    # 각 방향별 정방향 점수 계산
     score = 0
     for kw in keywords:
       if kw.lower() in extracted_text.lower():
         score += 15
 
-    # 수주번호 패턴(H/X/Z/M + 숫자) 포함 시 높은 가산점
     if re.search(
         r"[HXZM][0-9OQZILsSbB]{5,}", extracted_text, re.IGNORECASE
     ):
@@ -169,7 +174,6 @@ def process_ocr_smart(img, ocr_reader):
       best_img = test_img
       best_results = results
 
-  # 정방향 점수가 너무 낮을 경우 기본 이미지로 처리
   if best_score < 15:
     img_np = np.array(img.convert("RGB"))
     return ocr_reader.readtext(img_np), img
@@ -185,7 +189,6 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
-  # 센스 있는 대기 안내 문구 표시
   st.warning("""
     ☕ **잠시 커피 한 잔의 여유를 가져보세요!**  
     AI가 문서의 **방향을 바르게 잡고 정밀하게 분석**하는 데 **약 1~2분 정도** 소요됩니다.  
@@ -220,7 +223,6 @@ if uploaded_files:
           image = Image.open(io.BytesIO(file_bytes))
 
         if image:
-          # 자동 회전 감지 후 OCR 분석
           ocr_results, _ = process_ocr_smart(image, reader)
 
           parsed_data = []
